@@ -1,0 +1,17 @@
+/.env
+/.env.*
+!/.env.example
+
+/vendor/
+/node_modules/
+
+#/ Laravel generated
+/storage/*.key
+/public/storage
+/bootstrap/cache/*.php
+
+# IDE / OS
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db

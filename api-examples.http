@@ -1,0 +1,288 @@
+###############################################################################
+# ERP Learning Project — API Request Examples
+# Use these with VS Code REST Client, curl, or import into Postman.
+###############################################################################
+
+@baseUrl = http://localhost:8000/api
+
+###############################################################################
+# HEALTH CHECK
+###############################################################################
+
+### Health check
+GET {{baseUrl}}/health
+
+
+
+###############################################################################
+# CUSTOMERS
+###############################################################################
+
+### List all customers
+GET {{baseUrl}}/customers
+
+### Create a customer
+POST {{baseUrl}}/customers
+Content-Type: application/json
+
+{
+  "name": "Juan dela Cruz",
+  "email": "juan@example.com",
+  "phone": "09171234567",
+  "address": "123 Rizal Street, Manila"
+}
+
+### Get a single customer (with order history)
+GET {{baseUrl}}/customers/1
+
+### Update a customer
+PUT {{baseUrl}}/customers/1
+Content-Type: application/json
+
+{
+  "phone": "09999999999",
+  "address": "456 New Address, Makati"
+}
+
+### Delete a customer (will fail if they have orders)
+DELETE {{baseUrl}}/customers/99
+
+
+
+###############################################################################
+# SUPPLIERS
+###############################################################################
+
+### List all suppliers
+GET {{baseUrl}}/suppliers
+
+### Create a supplier
+POST {{baseUrl}}/suppliers
+Content-Type: application/json
+
+{
+  "name": "Global Tech Distributors",
+  "email": "sales@globaltech.com",
+  "phone": "028001234",
+  "address": "10 Ortigas Ave, Pasig City",
+  "contact_person": "Alice Reyes"
+}
+
+
+
+###############################################################################
+# PRODUCTS — including barcode and SKU lookup
+###############################################################################
+
+### List all products (with stock levels)
+GET {{baseUrl}}/products
+
+### Search products by name
+GET {{baseUrl}}/products?search=mouse
+
+### Create a product
+POST {{baseUrl}}/products
+Content-Type: application/json
+
+{
+  "name": "Standing Desk Converter",
+  "sku": "DESK-CONV-001",
+  "barcode": "9990000000001",
+  "description": "Height-adjustable standing desk converter",
+  "price": 4500.00,
+  "cost": 2800.00,
+  "unit": "piece",
+  "reorder_point": 3,
+  "initial_stock": 10
+}
+
+### Get a single product
+GET {{baseUrl}}/products/1
+
+###
+# ─── BARCODE LOOKUP ──────────────────────────────────────────────────────────
+# Simulates a barcode scanner at a POS terminal or receiving dock.
+# In a real system, the handheld scanner sends this HTTP request automatically.
+###
+
+### Look up product by barcode (seeded barcode — Wireless Mouse)
+GET {{baseUrl}}/products/barcode/8901234567890
+
+### Look up product by barcode (HP Toner — low stock item)
+GET {{baseUrl}}/products/barcode/8901234567897
+
+### Look up product by barcode (Webcam — zero stock item)
+GET {{baseUrl}}/products/barcode/8901234567898
+
+### Look up product by barcode (unknown — will return 404)
+GET {{baseUrl}}/products/barcode/0000000000000
+
+### Look up product by SKU
+GET {{baseUrl}}/products/sku/MOUSE-WL-001
+
+
+
+###############################################################################
+# INVENTORY
+###############################################################################
+
+### View all stock levels
+GET {{baseUrl}}/inventory
+
+###
+# ─── LOW STOCK ALERT ─────────────────────────────────────────────────────────
+# Returns all products where quantity <= reorder_point
+# Use this to trigger purchase orders before you run out!
+###
+
+### Get low stock products
+GET {{baseUrl}}/inventory/low-stock
+
+###
+# ─── MANUAL ADJUSTMENT ───────────────────────────────────────────────────────
+# Use for: cycle count corrections, write-offs, found stock
+# quantity_change: positive = add stock, negative = remove stock
+###
+
+### Positive adjustment (found extra in back storage)
+POST {{baseUrl}}/inventory/1/adjust
+Content-Type: application/json
+
+{
+  "quantity_change": 5,
+  "reason": "Found 5 units in overflow storage during cycle count"
+}
+
+### Negative adjustment (damaged goods write-off)
+POST {{baseUrl}}/inventory/1/adjust
+Content-Type: application/json
+
+{
+  "quantity_change": -2,
+  "reason": "2 units damaged during transit — written off"
+}
+
+### Invalid adjustment (would cause negative stock — expect 422 error)
+POST {{baseUrl}}/inventory/9/adjust
+Content-Type: application/json
+
+{
+  "quantity_change": -999,
+  "reason": "Testing error handling"
+}
+
+
+
+###############################################################################
+# SALES ORDERS — Sales Flow (Customer buys → inventory decreases)
+###############################################################################
+
+### List all sales orders
+GET {{baseUrl}}/sales-orders
+
+### Filter by status
+GET {{baseUrl}}/sales-orders?status=confirmed
+
+### Filter by customer
+GET {{baseUrl}}/sales-orders?customer_id=1
+
+###
+# ─── CREATE SALES ORDER ──────────────────────────────────────────────────────
+# WATCH: Run GET /inventory before AND after this request.
+# You will see the quantities for products 1 and 2 decrease!
+###
+
+### Create a sales order (will deduct inventory on success)
+POST {{baseUrl}}/sales-orders
+Content-Type: application/json
+
+{
+  "customer_id": 1,
+  "notes": "Urgent — needed before end of month",
+  "items": [
+    { "product_id": 1, "quantity": 2, "unit_price": 850.00 },
+    { "product_id": 4, "quantity": 3, "unit_price": 320.00 }
+  ]
+}
+
+### Try to over-sell (order more than in stock — expect 422 error)
+POST {{baseUrl}}/sales-orders
+Content-Type: application/json
+
+{
+  "customer_id": 1,
+  "notes": "This should fail",
+  "items": [
+    { "product_id": 1, "quantity": 99999, "unit_price": 850.00 }
+  ]
+}
+
+### Try to sell out-of-stock product (Webcam — product_id 9)
+POST {{baseUrl}}/sales-orders
+Content-Type: application/json
+
+{
+  "customer_id": 2,
+  "items": [
+    { "product_id": 9, "quantity": 1, "unit_price": 1650.00 }
+  ]
+}
+
+### Get a single sales order
+GET {{baseUrl}}/sales-orders/1
+
+###
+# ─── CANCEL SALES ORDER ──────────────────────────────────────────────────────
+# WATCH: After cancelling, check /inventory again.
+# The stock will be RESTORED for the cancelled items.
+###
+
+### Cancel a sales order (restores inventory)
+POST {{baseUrl}}/sales-orders/1/cancel
+
+
+
+###############################################################################
+# PURCHASE ORDERS — Purchase Flow (Buy from supplier → inventory increases on receive)
+###############################################################################
+
+### List all purchase orders
+GET {{baseUrl}}/purchase-orders
+
+### Filter by status
+GET {{baseUrl}}/purchase-orders?status=pending
+
+###
+# ─── CREATE PURCHASE ORDER ───────────────────────────────────────────────────
+# NOTE: Inventory does NOT change when the PO is created.
+# It only changes when you POST to /receive below.
+###
+
+### Create a purchase order (NO inventory change yet)
+POST {{baseUrl}}/purchase-orders
+Content-Type: application/json
+
+{
+  "supplier_id": 1,
+  "notes": "Restocking after low-stock alert",
+  "items": [
+    { "product_id": 8, "quantity": 20, "unit_cost": 1900.00 },
+    { "product_id": 9, "quantity": 50, "unit_cost": 980.00 }
+  ]
+}
+
+### Get the purchase order (notice status is 'pending', inventory unchanged)
+GET {{baseUrl}}/purchase-orders/1
+
+###
+# ─── RECEIVE PURCHASE ORDER ──────────────────────────────────────────────────
+# THIS is the key action in the purchase flow.
+# WATCH: Run GET /inventory before AND after this request.
+# Stock for products 8 and 9 will INCREASE.
+###
+
+### Receive purchase order (THIS increases inventory!)
+POST {{baseUrl}}/purchase-orders/1/receive
+
+### Try to receive same PO again (expect 422 — already received)
+POST {{baseUrl}}/purchase-orders/1/receive
