@@ -1,22 +1,23 @@
-# 📦 Laravel ERP Learning Project
+# 📦 Laravel ERP + Odoo Integration — Learning Project
 
-A simplified **ERP (Enterprise Resource Planning)** backend built with Laravel.
-Designed to teach junior developers core ERP concepts: sales flow, purchase flow,
-inventory management, and product tracking — with real, runnable code.
+A simplified **ERP (Enterprise Resource Planning)** backend built with Laravel,
+integrated with **Odoo Sales** via JSON-RPC. Designed to teach junior developers
+how a real ERP system works — from local inventory management to syncing data
+with an external ERP platform like Odoo.
 
 ---
 
-## 🎯 What You'll Learn
+## 🎯 What This Project Covers
 
-| ERP Concept | What This Project Demonstrates |
+| Concept | Description |
 |---|---|
-| **Sales Flow** | Customer places order → inventory is deducted |
-| **Purchase Flow** | Supplier delivers stock → inventory increases |
-| **Inventory Tracking** | Real-time stock levels, automatic adjustments |
-| **Product Management** | SKU, barcode, pricing, stock thresholds |
-| **Customer Management** | Single customer table, simple profile |
-| **Database Transactions** | Atomic inventory updates (no partial writes) |
-| **Service Layer** | Business logic separated from controllers |
+| **Sales Flow** | Customer places order → inventory is deducted automatically |
+| **Purchase Flow** | Supplier delivers stock → inventory increases on receive |
+| **Inventory Tracking** | Real-time stock levels with automatic adjustments |
+| **Product Management** | SKU, barcode, pricing, and stock thresholds |
+| **Odoo Integration** | Products and sales orders sync to Odoo Sales via JSON-RPC |
+| **Service Layer Pattern** | Business logic separated from controllers |
+| **Database Transactions** | Atomic updates — either everything succeeds or nothing does |
 
 ---
 
@@ -26,39 +27,37 @@ inventory management, and product tracking — with real, runnable code.
 erp-laravel/
 ├── app/
 │   ├── Http/Controllers/
-│   │   ├── CustomerController.php       ← CRUD for customers
-│   │   ├── ProductController.php        ← Product + barcode lookup
-│   │   ├── InventoryController.php      ← Stock view & manual adjustments
-│   │   ├── SalesOrderController.php     ← Sales flow
-│   │   └── PurchaseOrderController.php  ← Purchase flow
+│   │   ├── CustomerController.php
+│   │   ├── ProductController.php        ← Supports ?push_to_odoo=true
+│   │   ├── InventoryController.php
+│   │   ├── SalesOrderController.php
+│   │   └── PurchaseOrderController.php
 │   ├── Models/
 │   │   ├── Customer.php
-│   │   ├── Product.php
+│   │   ├── Product.php                  ← Has odoo_id column for sync tracking
 │   │   ├── Inventory.php
-│   │   ├── SalesOrder.php
-│   │   ├── SalesOrderItem.php
-│   │   ├── Supplier.php
-│   │   ├── PurchaseOrder.php
-│   │   └── PurchaseOrderItem.php
+│   │   ├── SalesOrder.php               ← Has odoo_id column for sync tracking
+│   │   └── ...
 │   └── Services/
-│       ├── SalesOrderService.php        ← Sales business logic
-│       ├── PurchaseOrderService.php     ← Purchase business logic
-│       └── InventoryService.php         ← Inventory adjustment logic
-├── database/
-│   ├── migrations/                      ← All table definitions
-│   └── seeders/                         ← Sample data
-└── routes/api.php                       ← All REST endpoints
+│       ├── OdooService.php              ← JSON-RPC transport layer
+│       ├── OdooSalesService.php         ← Odoo business logic (products, orders)
+│       ├── SalesOrderService.php        ← Local sales logic + Odoo push
+│       ├── PurchaseOrderService.php
+│       └── InventoryService.php
+├── database/migrations/
+└── routes/api.php
 ```
 
 ---
 
-## ⚙️ Setup Instructions
+## ⚙️ Setup
 
 ### Requirements
 - PHP 8.2+
 - Composer
-- MySQL 8.0+ or PostgreSQL 14+
 - Laravel 11
+- SQLite (default) or MySQL/PostgreSQL
+- An Odoo instance (Odoo.com free trial or self-hosted)
 
 ### 1. Clone & Install
 
@@ -70,19 +69,26 @@ cp .env.example .env
 php artisan key:generate
 ```
 
-### 2. Configure Database
+### 2. Configure Database & Odoo
 
 Edit `.env`:
+
 ```env
-DB_CONNECTION=mysql
-DB_HOST=127.0.0.1
-DB_PORT=3306
-DB_DATABASE=erp_learning
-DB_USERNAME=root
-DB_PASSWORD=secret
+# Database
+DB_CONNECTION=sqlite
+DB_DATABASE=database/database.sqlite
+
+# Odoo Integration
+ODOO_URL=https://yourcompany.odoo.com
+ODOO_DB=yourcompany
+ODOO_USERNAME=your@email.com
+ODOO_API_KEY=your_odoo_login_password
 ```
 
-### 3. Run Migrations & Seed
+> **Note:** `ODOO_API_KEY` should be your Odoo **login password**, not the API token.
+> The integration uses JSON-RPC session authentication which requires your actual credentials.
+
+### 3. Migrate & Seed
 
 ```bash
 php artisan migrate
@@ -96,311 +102,190 @@ php artisan serve
 # API available at http://localhost:8000/api
 ```
 
+### 5. Verify Odoo Connection
+
+```bash
+curl http://localhost:8000/api/test/odoo
+```
+
+A successful response looks like:
+```json
+{
+  "success": true,
+  "message": "Odoo connection is working!",
+  "data": {
+    "authenticated_uid": 2,
+    "total_products": 0,
+    "sample_customers": []
+  }
+}
+```
+
 ---
 
 ## 🔄 ERP Business Flows
 
-### Sales Flow (Outbound)
+### Sales Flow (Outbound — stock goes DOWN)
+
 ```
-Customer
+Customer submits order
   └── POST /api/sales-orders
-        └── Validates stock availability
-              └── Creates SalesOrder + SalesOrderItems
-                    └── Deducts quantity from inventory
-                          └── Marks order as "confirmed"
+        └── Validates stock is available for each item
+              └── Creates SalesOrder + SalesOrderItems in SQLite
+                    └── Deducts quantity from local inventory
+                          └── Pushes confirmed order to Odoo Sales (sale.order)
 ```
 
-**Key concept:** When you sell, inventory goes DOWN. The system must check stock
-before confirming, and use a database transaction so either everything succeeds
-or nothing does.
-
-### Purchase Flow (Inbound)
-```
-Supplier
-  └── POST /api/purchase-orders
-        └── Creates PurchaseOrder + PurchaseOrderItems
-              └── POST /api/purchase-orders/{id}/receive
-                    └── Increases inventory for each item received
-                          └── Marks order as "received"
-```
-
-**Key concept:** When you buy from a supplier, inventory goes UP. The "receive"
-step simulates the physical arrival of goods at the warehouse.
-
-### Inventory Flow
-```
-Initial stock (from seeder)
-  ↕ +/- Sales Orders (deduct)
-  ↕ +/- Purchase Orders (add)
-  ↕ +/- Manual Adjustments (correction)
-  = Current Stock Level
-```
+The key principle here is **atomicity** — if stock validation fails for even one item,
+nothing is saved. Laravel's `DB::transaction()` ensures no partial writes ever happen.
+The Odoo sync happens after the local transaction succeeds. If Odoo is unreachable,
+the local order is still saved and the sync failure is logged for retry.
 
 ---
 
-## 📡 API Endpoint Reference
+### Purchase Flow (Inbound — stock goes UP)
+
+```
+Supplier delivers goods
+  └── POST /api/purchase-orders         ← Creates the PO (no stock change yet)
+        └── POST /api/purchase-orders/{id}/receive
+              └── Increases inventory for each item received
+                    └── Marks order as "received"
+```
+
+The two-step design mirrors real warehouse operations — a purchase order is created
+when you place the order with a supplier, but stock only increases when goods
+physically arrive and are confirmed received.
+
+---
+
+### Inventory Flow
+
+```
+Initial stock (from seeder)
+  ↕  Sales Orders   → deduct stock
+  ↕  Purchase Orders → add stock on receive
+  ↕  Manual Adjustments → corrections, write-offs
+  =  Current Stock Level
+```
+
+Think of inventory like a bank ledger — every sale is a debit, every received
+purchase is a credit, and the current stock is the running balance.
+
+---
+
+## 🔗 Odoo Integration
+
+This project connects to Odoo via **JSON-RPC** (not XML-RPC, which is blocked on
+Odoo.com free instances). The integration uses two Odoo endpoints:
+
+| Endpoint | Purpose |
+|---|---|
+| `/web/session/authenticate` | Login and get a session cookie |
+| `/web/dataset/call_kw` | Call any Odoo model method (create, read, write, etc.) |
+
+### How Syncing Works
+
+Each synced record stores the Odoo ID locally in an `odoo_id` column. This acts
+as a foreign key between your Laravel database and Odoo — before creating a
+duplicate, the service checks if `odoo_id` is already set.
+
+```
+Laravel Product (id: 14)
+  └── odoo_id: 42  ← points to product.template record 42 in Odoo
+```
+
+### What Gets Synced
+
+| Laravel | Odoo Model | Triggered By |
+|---|---|---|
+| `Product` | `product.template` | `POST /api/products?push_to_odoo=true` |
+| `Customer` | `res.partner` | Automatically when pushing a sales order |
+| `SalesOrder` | `sale.order` | `POST /api/sales-orders` (auto) |
+
+### Syncing a Product to Odoo
+
+Add `push_to_odoo=true` as a query parameter when creating or updating a product:
+
+```bash
+# Create product and sync to Odoo
+curl -X POST http://localhost:8000/api/products \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Wireless Mouse",
+    "sku": "MOUSE-001",
+    "price": 850.00,
+    "cost": 500.00,
+    "unit": "piece",
+    "initial_stock": 50,
+    "push_to_odoo": true
+  }'
+
+# Sync an existing product to Odoo
+curl -X PUT http://localhost:8000/api/products/1 \
+  -H "Content-Type: application/json" \
+  -d '{ "push_to_odoo": true }'
+```
+
+A successful sync returns `"odoo_synced": true` and an `odoo_id` in the response.
+
+### Creating a Sales Order (auto-syncs to Odoo)
+
+```bash
+curl -X POST http://localhost:8000/api/sales-orders \
+  -H "Content-Type: application/json" \
+  -d '{
+    "customer_id": 1,
+    "notes": "Rush delivery",
+    "items": [
+      { "product_id": 1, "quantity": 2, "unit_price": 850.00 }
+    ]
+  }'
+```
+
+This creates the order locally, deducts stock, and pushes to Odoo in one call.
+The customer and product are auto-synced to Odoo if they haven't been already.
+
+---
+
+## 🧠 Key Concepts for Junior Developers
+
+### 1. Why JSON-RPC instead of XML-RPC?
+Odoo supports both protocols, but Odoo.com free instances block `/xmlrpc/2/*`
+endpoints at the network level. JSON-RPC via `/web/dataset/call_kw` uses the
+same authentication layer as the Odoo web browser interface — so it's never blocked.
+
+### 2. Idempotency in sync
+The `syncProductToOdoo()` and `syncCustomerToOdoo()` methods always check for
+an existing `odoo_id` before creating. This prevents duplicate records in Odoo
+if the same sync is triggered multiple times.
+
+### 3. Graceful degradation
+Odoo sync is always wrapped in a `try/catch`. If Odoo is down or returns an error,
+the local Laravel operation (order creation, product save) still succeeds. The
+error is logged and can be retried later via a job queue.
+
+### 4. Service Layer
+Business logic lives in `Services/`, not `Controllers/`. Controllers only handle
+HTTP input/output. This makes the ERP logic testable and reusable independently
+of the HTTP layer.
+
+### 5. Odoo domain filters
+When querying Odoo, filters follow a domain syntax: `[['field', 'operator', 'value']]`.
+Multiple conditions are ANDed by default. Example: `[['state', '=', 'sale'], ['amount_total', '>', 1000]]`.
+
+---
+
+## 📡 API Quick Reference
 
 Base URL: `http://localhost:8000/api`
 
-### Customers
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/customers` | List all customers |
-| POST | `/customers` | Create a customer |
-| GET | `/customers/{id}` | Get a customer |
-| PUT | `/customers/{id}` | Update a customer |
-| DELETE | `/customers/{id}` | Delete a customer |
-
-### Products
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/products` | List all products |
-| POST | `/products` | Create a product |
-| GET | `/products/{id}` | Get a product |
-| PUT | `/products/{id}` | Update a product |
-| GET | `/products/barcode/{barcode}` | 🔍 Barcode lookup |
-| GET | `/products/sku/{sku}` | SKU lookup |
-
-### Inventory
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/inventory` | View all stock levels |
-| GET | `/inventory/low-stock` | Products below reorder point |
-| POST | `/inventory/{product_id}/adjust` | Manual stock adjustment |
-
-### Sales Orders
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/sales-orders` | List all sales orders |
-| POST | `/sales-orders` | Create sales order (deducts stock) |
-| GET | `/sales-orders/{id}` | Get order with items |
-| POST | `/sales-orders/{id}/cancel` | Cancel order (restores stock) |
-
-### Purchase Orders
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/purchase-orders` | List all purchase orders |
-| POST | `/purchase-orders` | Create purchase order |
-| GET | `/purchase-orders/{id}` | Get order with items |
-| POST | `/purchase-orders/{id}/receive` | Receive goods (adds stock) |
-
-### Suppliers
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/suppliers` | List all suppliers |
-| POST | `/suppliers` | Create a supplier |
-
----
-
-## 📋 Example API Requests
-
-### Create a Customer
-```http
-POST /api/customers
-Content-Type: application/json
-
-{
-  "name": "Juan dela Cruz",
-  "email": "juan@example.com",
-  "phone": "09171234567",
-  "address": "123 Rizal St, Manila"
-}
-```
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "id": 1,
-    "name": "Juan dela Cruz",
-    "email": "juan@example.com",
-    "phone": "09171234567",
-    "address": "123 Rizal St, Manila",
-    "created_at": "2025-01-15T08:00:00Z"
-  }
-}
-```
-
----
-
-### Barcode Lookup (POS simulation)
-```http
-GET /api/products/barcode/8901234567890
-```
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "id": 3,
-    "name": "Wireless Mouse",
-    "sku": "MOUSE-001",
-    "barcode": "8901234567890",
-    "price": 850.00,
-    "unit": "piece",
-    "current_stock": 45,
-    "reorder_point": 10
-  }
-}
-```
-
----
-
-### Create a Sales Order (deducts inventory)
-```http
-POST /api/sales-orders
-Content-Type: application/json
-
-{
-  "customer_id": 1,
-  "notes": "Rush delivery",
-  "items": [
-    { "product_id": 3, "quantity": 2, "unit_price": 850.00 },
-    { "product_id": 5, "quantity": 1, "unit_price": 1200.00 }
-  ]
-}
-```
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Sales order created and inventory updated",
-  "data": {
-    "id": 1,
-    "order_number": "SO-20250115-001",
-    "status": "confirmed",
-    "customer": { "id": 1, "name": "Juan dela Cruz" },
-    "total_amount": 2900.00,
-    "items": [
-      {
-        "product_id": 3,
-        "product_name": "Wireless Mouse",
-        "quantity": 2,
-        "unit_price": 850.00,
-        "subtotal": 1700.00
-      }
-    ],
-    "inventory_updated": true
-  }
-}
-```
-
----
-
-### Create a Purchase Order (increases inventory on receive)
-```http
-POST /api/purchase-orders
-Content-Type: application/json
-
-{
-  "supplier_id": 1,
-  "notes": "Monthly restock",
-  "items": [
-    { "product_id": 3, "quantity": 100, "unit_cost": 500.00 },
-    { "product_id": 5, "quantity": 50, "unit_cost": 750.00 }
-  ]
-}
-```
-
-### Receive a Purchase Order (adds to inventory)
-```http
-POST /api/purchase-orders/1/receive
-```
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Purchase order received. Inventory has been updated.",
-  "data": {
-    "id": 1,
-    "order_number": "PO-20250115-001",
-    "status": "received",
-    "received_at": "2025-01-15T10:30:00Z",
-    "inventory_updated": true
-  }
-}
-```
-
----
-
-### Manual Inventory Adjustment
-```http
-POST /api/inventory/3/adjust
-Content-Type: application/json
-
-{
-  "quantity_change": -5,
-  "reason": "Damaged goods written off"
-}
-```
-
----
-
-## 🧠 Key Learning Points
-
-### 1. Database Transactions
-When creating a sales order, we use `DB::transaction()` to ensure that if anything
-fails (e.g., one product is out of stock), NO changes are committed. This prevents
-partial inventory deductions.
-
-```php
-DB::transaction(function () use ($data) {
-    $order = SalesOrder::create([...]);
-    foreach ($data['items'] as $item) {
-        // If this throws, the whole transaction rolls back
-        $this->inventoryService->deductStock($item['product_id'], $item['quantity']);
-    }
-});
-```
-
-### 2. Service Layer Pattern
-Business logic lives in Services, not Controllers. Controllers just handle HTTP
-concerns (parsing request, returning response). Services handle ERP rules.
-
-### 3. Order Status Machine
-```
-Sales Order:  pending → confirmed → shipped → delivered
-                                  ↘ cancelled
-Purchase Order: pending → ordered → received
-```
-
-### 4. Inventory as a Ledger
-Think of inventory like a bank account: every sale is a debit, every purchase
-receipt is a credit. The current stock is always the running balance.
-
----
-
-## 🗄️ Database Schema Overview
-
-```
-customers          products           inventory
-─────────────      ──────────         ─────────────
-id                 id                 id
-name               name               product_id (FK)
-email              sku                quantity
-phone              barcode            reorder_point
-address            description        updated_at
-created_at         price
-updated_at         unit
-                   created_at
-
-sales_orders       sales_order_items
-─────────────      ─────────────────
-id                 id
-order_number       sales_order_id (FK)
-customer_id (FK)   product_id (FK)
-status             quantity
-total_amount       unit_price
-notes              subtotal
-created_at
-
-suppliers          purchase_orders    purchase_order_items
-─────────────      ───────────────    ────────────────────
-id                 id                 id
-name               order_number       purchase_order_id (FK)
-email              supplier_id (FK)   product_id (FK)
-phone              status             quantity
-address            total_cost         unit_cost
-created_at         notes              subtotal
-                   received_at
-```
+| Module | Endpoints |
+|---|---|
+| Customers | `GET/POST /customers`, `GET/PUT/DELETE /customers/{id}` |
+| Suppliers | `GET/POST /suppliers` |
+| Products | `GET/POST /products`, `GET/PUT /products/{id}`, barcode & SKU lookup |
+| Inventory | `GET /inventory`, `GET /inventory/low-stock`, `POST /inventory/{id}/adjust` |
+| Sales Orders | `GET/POST /sales-orders`, `GET /sales-orders/{id}`, `POST /sales-orders/{id}/cancel` |
+| Purchase Orders | `GET/POST /purchase-orders`, `GET /purchase-orders/{id}`, `POST /purchase-orders/{id}/receive` |
+| Odoo Test | `GET /test/odoo` |
