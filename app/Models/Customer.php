@@ -27,6 +27,8 @@ class Customer extends Model
         'email',
         'phone',
         'address',
+        'odoo_id'
+
     ];
 
     /**

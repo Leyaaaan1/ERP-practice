@@ -35,6 +35,8 @@ class Inventory extends Model
         'quantity',
         'reorder_point',
         'last_updated',
+        'odoo_id'
+
     ];
 
     protected $casts = [

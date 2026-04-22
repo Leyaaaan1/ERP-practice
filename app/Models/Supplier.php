@@ -33,6 +33,7 @@ class Supplier extends Model
         'phone',
         'address',
         'contact_person',
+        'odoo_id'
     ];
 
     /**

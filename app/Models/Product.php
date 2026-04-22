@@ -36,6 +36,7 @@ class Product extends Model
         'cost',
         'unit',
         'is_active',
+        'odoo_id'
     ];
 
     protected $casts = [

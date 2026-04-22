@@ -1,0 +1,46 @@
+[2026-04-22 01:41:53] local.ERROR: The C:\Users\leyan\Desktop\ERP\ERP-practice\bootstrap\cache directory must be present and writable. {"exception":"[object] (Exception(code: 0): The C:\\Users\\leyan\\Desktop\\ERP\\ERP-practice\\bootstrap\\cache directory must be present and writable. at C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/PackageManifest.php:179)
+[stacktrace]
+#0 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/PackageManifest.php(132): Illuminate/Foundation/PackageManifest->write()
+#1 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/PackageManifest.php(108): Illuminate/Foundation/PackageManifest->build()
+#2 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/PackageManifest.php(91): Illuminate/Foundation/PackageManifest->getManifest()
+#3 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/PackageManifest.php(80): Illuminate/Foundation/PackageManifest->config()
+#4 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/Bootstrap/RegisterFacades.php(26): Illuminate/Foundation/PackageManifest->aliases()
+#5 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(342): Illuminate/Foundation/Bootstrap/RegisterFacades->bootstrap()
+#6 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/Console/Kernel.php(474): Illuminate/Foundation/Application->bootstrapWith()
+#7 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/Console/Kernel.php(196): Illuminate/Foundation/Console/Kernel->bootstrap()
+#8 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1235): Illuminate/Foundation/Console/Kernel->handle()
+#9 C:/Users/leyan/Desktop/ERP/ERP-practice/artisan(8): Illuminate/Foundation/Application->handleCommand()
+#10 {main}
+"} 
+[2026-04-22 01:42:05] local.ERROR: foreach() argument must be of type array|object, int given {"exception":"[object] (ErrorException(code: 0): foreach() argument must be of type array|object, int given at C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/Bootstrap/RegisterProviders.php:51)
+[stacktrace]
+#0 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/Bootstrap/HandleExceptions.php(258): Illuminate/Foundation/Bootstrap/HandleExceptions->handleError()
+#1 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/Bootstrap/RegisterProviders.php(51): Illuminate/Foundation/Bootstrap/HandleExceptions->{closure:Illuminate/Foundation/Bootstrap/HandleExceptions::forwardsTo():257}()
+#2 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/Bootstrap/RegisterProviders.php(34): Illuminate/Foundation/Bootstrap/RegisterProviders->mergeAdditionalProviders()
+#3 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(342): Illuminate/Foundation/Bootstrap/RegisterProviders->bootstrap()
+#4 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/Console/Kernel.php(474): Illuminate/Foundation/Application->bootstrapWith()
+#5 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/Console/Kernel.php(196): Illuminate/Foundation/Console/Kernel->bootstrap()
+#6 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1235): Illuminate/Foundation/Console/Kernel->handle()
+#7 C:/Users/leyan/Desktop/ERP/ERP-practice/artisan(8): Illuminate/Foundation/Application->handleCommand()
+#8 {main}
+"} 
+[2026-04-22 01:51:12] local.ERROR: There are no commands defined in the "odoo" namespace. {"exception":"[object] (Symfony\\Component\\Console\\Exception\\NamespaceNotFoundException(code: 0): There are no commands defined in the \"odoo\" namespace. at C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/symfony/console/Application.php:694)
+[stacktrace]
+#0 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/symfony/console/Application.php(743): Symfony/Component/Console/Application->findNamespace()
+#1 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/symfony/console/Application.php(298): Symfony/Component/Console/Application->find()
+#2 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/symfony/console/Application.php(195): Symfony/Component/Console/Application->doRun()
+#3 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/Console/Kernel.php(198): Symfony/Component/Console/Application->run()
+#4 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1235): Illuminate/Foundation/Console/Kernel->handle()
+#5 C:/Users/leyan/Desktop/ERP/ERP-practice/artisan(8): Illuminate/Foundation/Application->handleCommand()
+#6 {main}
+"} 
+[2026-04-22 01:51:39] local.ERROR: There are no commands defined in the "odoo" namespace. {"exception":"[object] (Symfony\\Component\\Console\\Exception\\NamespaceNotFoundException(code: 0): There are no commands defined in the \"odoo\" namespace. at C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/symfony/console/Application.php:694)
+[stacktrace]
+#0 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/symfony/console/Application.php(743): Symfony/Component/Console/Application->findNamespace()
+#1 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/symfony/console/Application.php(298): Symfony/Component/Console/Application->find()
+#2 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/symfony/console/Application.php(195): Symfony/Component/Console/Application->doRun()
+#3 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/Console/Kernel.php(198): Symfony/Component/Console/Application->run()
+#4 C:/Users/leyan/Desktop/ERP/ERP-practice/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1235): Illuminate/Foundation/Console/Kernel->handle()
+#5 C:/Users/leyan/Desktop/ERP/ERP-practice/artisan(8): Illuminate/Foundation/Application->handleCommand()
+#6 {main}
+"} 

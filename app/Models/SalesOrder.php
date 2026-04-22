@@ -37,6 +37,7 @@ class SalesOrder extends Model
         'status',
         'total_amount',
         'notes',
+        'odoo_id'
     ];
 
     protected $casts = [

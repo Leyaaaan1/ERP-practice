@@ -45,6 +45,7 @@ class PurchaseOrder extends Model
         'total_cost',
         'notes',
         'received_at',
+        'odoo_id'
     ];
 
     protected $casts = [

@@ -32,6 +32,7 @@ class PurchaseOrderItem extends Model
         'quantity',
         'unit_cost',
         'subtotal',
+        'odoo_id'
     ];
 
     protected $casts = [
