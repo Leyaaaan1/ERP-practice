@@ -3000,7 +3000,7 @@
             ],
             "description": "Common interfaces for simple caching",
             "keywords": [
-                "cache",
+                " cache",
                 "caching",
                 "psr",
                 "psr-16",

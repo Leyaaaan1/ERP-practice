@@ -6,105 +6,76 @@ use App\Models\SalesOrder;
 use App\Models\SalesOrderItem;
 use App\Models\Product;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
-/**
- * SalesOrderService
- *
- * ERP CONCEPT: This service manages the entire Sales Flow.
- * It orchestrates: order creation → stock validation → inventory deduction.
- *
- * THE SALES FLOW (step by step):
- *   1. Receive order request with customer_id and items[]
- *   2. Validate all products exist and have sufficient stock
- *   3. Generate a unique order number
- *   4. Create the SalesOrder header record
- *   5. Create each SalesOrderItem line
- *   6. Deduct inventory for each item
- *   7. Calculate and store the total amount
- *   All of this happens inside ONE transaction — if any step fails,
- *   NOTHING is saved.
- *
- * IMPORTANT: The InventoryService does the actual stock deduction.
- * This service coordinates the overall flow and delegates to InventoryService.
- * This separation keeps each service focused on one responsibility.
- */
 class SalesOrderService
 {
     public function __construct(
-        private readonly InventoryService $inventoryService
+        private readonly InventoryService $inventoryService,
+        private readonly OdooSalesService $odooSalesService
     ) {}
 
-    /**
-     * Create a new sales order and deduct inventory.
-     *
-     * @param array $data {
-     *   customer_id: int,
-     *   notes: string|null,
-     *   items: array of {product_id, quantity, unit_price}
-     * }
-     * @return SalesOrder
-     * @throws \Exception if any product is out of stock
-     */
     public function createOrder(array $data): SalesOrder
     {
-        // STEP 1: Pre-validate all items BEFORE starting the transaction.
-        // We check stock availability upfront to give clear error messages.
-        // (The InventoryService also validates, but doing it here first
-        //  provides better UX by catching all stock issues at once.)
         $this->validateStockAvailability($data['items']);
 
-        // STEP 2: Everything inside this transaction is atomic.
-        // If any exception is thrown, ALL database changes are rolled back.
         return DB::transaction(function () use ($data) {
 
-            // STEP 3: Calculate total amount from items
             $totalAmount = collect($data['items'])->sum(function ($item) {
                 return $item['quantity'] * $item['unit_price'];
             });
 
-            // STEP 4: Create the order header
             $order = SalesOrder::create([
                 'order_number' => $this->generateOrderNumber(),
                 'customer_id' => $data['customer_id'],
-                'status' => SalesOrder::STATUS_CONFIRMED, // Auto-confirm on create
+                'status' => SalesOrder::STATUS_CONFIRMED,
                 'total_amount' => $totalAmount,
                 'notes' => $data['notes'] ?? null,
             ]);
 
-            // STEP 5: Create each line item and deduct inventory
             foreach ($data['items'] as $itemData) {
-                // Create the line item record
                 SalesOrderItem::create([
                     'sales_order_id' => $order->id,
                     'product_id' => $itemData['product_id'],
                     'quantity' => $itemData['quantity'],
                     'unit_price' => $itemData['unit_price'],
-                    // Store subtotal on the line — useful for quick queries
                     'subtotal' => $itemData['quantity'] * $itemData['unit_price'],
                 ]);
 
-                // STEP 6: Deduct from inventory
-                // If this throws (e.g., race condition depleted stock),
-                // the entire transaction rolls back.
                 $this->inventoryService->deductStock(
                     $itemData['product_id'],
                     $itemData['quantity']
                 );
             }
 
-            // Load relationships for the response
             return $order->load(['customer', 'items.product']);
         });
     }
 
     /**
-     * Cancel a sales order and restore inventory.
-     *
-     * ERP CONCEPT: Cancellation is the reverse of the sales flow.
-     * If stock was already deducted (status = confirmed), we must restore it.
-     *
-     * @throws \Exception if order cannot be cancelled
+     * Create order and push to Odoo
      */
+    public function createOrderAndPushToOdoo(array $data): SalesOrder
+    {
+        $order = $this->createOrder($data);
+
+        try {
+            $this->odooSalesService->pushSalesOrderToOdoo($order);
+            Log::info("Sales order pushed to Odoo", [
+                'sales_order_id' => $order->id,
+                'order_number' => $order->order_number,
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Failed to push sales order to Odoo", [
+                'sales_order_id' => $order->id,
+                'error' => $e->getMessage(),
+            ]);
+            // Order is still created locally - Odoo sync is optional
+        }
+
+        return $order;
+    }
+
     public function cancelOrder(SalesOrder $order): SalesOrder
     {
         if (!$order->isCancellable()) {
@@ -115,7 +86,6 @@ class SalesOrderService
         }
 
         return DB::transaction(function () use ($order) {
-            // If inventory was deducted (status = confirmed), restore it
             if ($order->hasInventoryDeducted()) {
                 foreach ($order->items as $item) {
                     $this->inventoryService->restoreStock(
@@ -128,16 +98,30 @@ class SalesOrderService
             $order->status = SalesOrder::STATUS_CANCELLED;
             $order->save();
 
+            // Sync cancellation to Odoo if order exists there
+            try {
+                if ($order->odoo_id) {
+                    $this->odooSalesService->callOdooMethod(
+                        'sale.order',
+                        'action_cancel',
+                        [[$order->odoo_id]]
+                    );
+                    Log::info("Sales order cancellation synced to Odoo", [
+                        'sales_order_id' => $order->id,
+                        'odoo_order_id' => $order->odoo_id,
+                    ]);
+                }
+            } catch (\Exception $e) {
+                Log::error("Failed to sync cancellation to Odoo", [
+                    'sales_order_id' => $order->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
             return $order->fresh(['customer', 'items.product']);
         });
     }
 
-    /**
-     * Pre-validate that all items have sufficient stock.
-     * Throws a descriptive exception if any product is unavailable.
-     *
-     * @throws \Exception
-     */
     private function validateStockAvailability(array $items): void
     {
         $errors = [];
@@ -166,21 +150,11 @@ class SalesOrderService
         }
     }
 
-    /**
-     * Generate a unique, human-readable order number.
-     *
-     * Format: SO-YYYYMMDD-NNN
-     * Example: SO-20250115-042
-     *
-     * ERP CONCEPT: Order numbers must be unique and human-readable
-     * for communication with customers and for warehouse picking slips.
-     */
     private function generateOrderNumber(): string
     {
         $date = now()->format('Ymd');
         $prefix = "SO-{$date}-";
 
-        // Find the highest order number for today and increment
         $lastOrder = SalesOrder::where('order_number', 'like', "{$prefix}%")
             ->orderBy('order_number', 'desc')
             ->first();

@@ -6,31 +6,14 @@ use App\Models\SalesOrder;
 use App\Services\SalesOrderService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Routing\Controller;
 
-/**
- * SalesOrderController
- *
- * ERP CONCEPT: This controller handles the Sales Flow.
- * Notice how thin this controller is — the real work happens in
- * SalesOrderService. The controller just:
- *   1. Validates the HTTP request
- *   2. Calls the service
- *   3. Returns the response
- *
- * SALES FLOW REMINDER:
- *   POST /sales-orders     → Creates order + deducts inventory
- *   POST /{id}/cancel      → Cancels order + restores inventory
- */
 class SalesOrderController extends Controller
 {
     public function __construct(
         private readonly SalesOrderService $salesOrderService
     ) {}
 
-    /**
-     * GET /api/sales-orders
-     * List all sales orders with customer info.
-     */
     public function index(Request $request): JsonResponse
     {
         $orders = SalesOrder::with('customer')
@@ -47,12 +30,7 @@ class SalesOrderController extends Controller
 
     /**
      * POST /api/sales-orders
-     *
-     * ERP KEY ACTION: Create a Sales Order.
-     * This triggers the full sales flow:
-     *   1. Validate stock availability for all items
-     *   2. Create order + line items
-     *   3. Deduct inventory (all inside a DB transaction)
+     * ?push_to_odoo=true to also push to Odoo
      */
     public function store(Request $request): JsonResponse
     {
@@ -65,20 +43,21 @@ class SalesOrderController extends Controller
             'items.*.unit_price'    => 'required|numeric|min:0',
         ]);
 
-        $order = $this->salesOrderService->createOrder($validated);
+        $pushToOdoo = $request->boolean('push_to_odoo', false);
+
+        $order = $pushToOdoo
+            ? $this->salesOrderService->createOrderAndPushToOdoo($validated)
+            : $this->salesOrderService->createOrder($validated);
 
         return response()->json([
             'success'            => true,
             'message'            => 'Sales order created and inventory updated.',
             'inventory_updated'  => true,
+            'odoo_synced'        => $pushToOdoo && !empty($order->odoo_id),
             'data'               => $order,
         ], 201);
     }
 
-    /**
-     * GET /api/sales-orders/{id}
-     * Get a single order with all line items and customer.
-     */
     public function show(SalesOrder $salesOrder): JsonResponse
     {
         $salesOrder->load(['customer', 'items.product']);
@@ -89,13 +68,6 @@ class SalesOrderController extends Controller
         ]);
     }
 
-    /**
-     * POST /api/sales-orders/{id}/cancel
-     *
-     * ERP KEY ACTION: Cancel a Sales Order.
-     * If inventory was already deducted (status = confirmed), it is RESTORED.
-     * This prevents stock from disappearing when an order is cancelled.
-     */
     public function cancel(SalesOrder $salesOrder): JsonResponse
     {
         $order = $this->salesOrderService->cancelOrder($salesOrder);
@@ -103,7 +75,8 @@ class SalesOrderController extends Controller
         return response()->json([
             'success'           => true,
             'message'           => "Order {$order->order_number} cancelled. Inventory restored.",
-            'inventory_restored' => $salesOrder->hasInventoryDeducted(), // Was stock returned?
+            'inventory_restored' => $salesOrder->hasInventoryDeducted(),
+            'odoo_synced'       => !empty($order->odoo_id),
             'data'              => $order,
         ]);
     }

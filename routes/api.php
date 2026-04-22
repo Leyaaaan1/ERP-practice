@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\TestOdooConnection;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\ProductController;
@@ -39,7 +40,7 @@ Route::get('products/barcode/{barcode}', [ProductController::class, 'lookupByBar
     ->name('products.barcode');
 Route::get('products/sku/{sku}', [ProductController::class, 'lookupBySku'])
     ->name('products.sku');
-
+Route::get('/test/odoo', [TestOdooConnection::class, 'testConnection']);
 Route::apiResource('products', ProductController::class);
 
 // ─── Inventory Management ───────────────────────────────────────────────────

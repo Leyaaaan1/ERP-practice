@@ -98,26 +98,32 @@ class OdooSalesService
             $this->odoo->write('product.template', [$product->odoo_id], [
                 'name'          => $product->name,
                 'list_price'    => (float) $product->price,
+                'standard_price' => (float) ($product->cost ?? $product->price),
                 'default_code'  => $product->sku,
+                'barcode'       => $product->barcode,
             ]);
             return $product->odoo_id;
         }
 
+        // Create new product in Odoo with all required fields
         $odooId = $this->odoo->create('product.template', [
-            'name'          => $product->name,
-            'list_price'    => (float) $product->price,
-            'default_code'  => $product->sku,  // SKU goes here
-            'barcode'       => $product->barcode,
-            'type'          => 'product',       // 'product'=storable, 'consu'=consumable, 'service'=service
-            'sale_ok'       => true,
-            'purchase_ok'   => true,
+            'name'            => $product->name,
+            'type'            => 'consu',       // storable product
+            'categ_id'        => 1,               // Default category ID in Odoo
+            'list_price'      => (float) $product->price,
+            'standard_price'  => (float) ($product->cost ?? $product->price),
+            'default_code'    => $product->sku,
+            'barcode'         => $product->barcode ?? null,
+            'sale_ok'         => true,
+            'purchase_ok'     => true,
+
         ]);
 
+        // Save Odoo ID to Laravel product
         $product->update(['odoo_id' => $odooId]);
 
         return $odooId;
     }
-
     /**
      * Get products from Odoo.
      */
@@ -288,7 +294,7 @@ class OdooSalesService
      * Call an Odoo action/button method directly.
      * Used for workflow transitions like action_confirm, action_cancel, etc.
      */
-    private function callOdooMethod(string $model, string $method, array $args): mixed
+    public function callOdooMethod(string $model, string $method, array $args): mixed
     {
         $uid = $this->odoo->authenticate();
 

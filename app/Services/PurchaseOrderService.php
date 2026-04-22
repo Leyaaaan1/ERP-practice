@@ -5,53 +5,23 @@ namespace App\Services;
 use App\Models\PurchaseOrder;
 use App\Models\PurchaseOrderItem;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
-/**
- * PurchaseOrderService
- *
- * ERP CONCEPT: This service manages the entire Purchase Flow.
- * It is the INBOUND counterpart to the SalesOrderService.
- *
- * THE PURCHASE FLOW (step by step):
- *   1. Create Purchase Order with supplier_id and items[]
- *      → No inventory change yet. You've only REQUESTED goods.
- *   2. Receive the Purchase Order (POST /purchase-orders/{id}/receive)
- *      → THIS is when inventory increases. Goods are physically in the warehouse.
- *
- * WHY TWO STEPS?
- * In real ERP systems, you can't add stock until goods arrive.
- * The supplier might ship late, partially, or with wrong items.
- * Separating "order" and "receive" mirrors real warehouse operations.
- *
- * CONTRAST WITH SALES:
- * Sales Order: stock deducted at CREATION (goods are promised to customer)
- * Purchase Order: stock added at RECEIPT (goods are confirmed in warehouse)
- */
 class PurchaseOrderService
 {
     public function __construct(
-        private readonly InventoryService $inventoryService
+        private readonly InventoryService $inventoryService,
+        private readonly OdooService $odooService
     ) {}
 
-    /**
-     * Create a new purchase order (does NOT update inventory).
-     *
-     * @param array $data {
-     *   supplier_id: int,
-     *   notes: string|null,
-     *   items: array of {product_id, quantity, unit_cost}
-     * }
-     */
     public function createOrder(array $data): PurchaseOrder
     {
         return DB::transaction(function () use ($data) {
 
-            // Calculate total cost from all line items
             $totalCost = collect($data['items'])->sum(function ($item) {
                 return $item['quantity'] * $item['unit_cost'];
             });
 
-            // Create PO header — starts as 'pending' (not yet sent to supplier)
             $order = PurchaseOrder::create([
                 'order_number' => $this->generateOrderNumber(),
                 'supplier_id' => $data['supplier_id'],
@@ -60,7 +30,6 @@ class PurchaseOrderService
                 'notes' => $data['notes'] ?? null,
             ]);
 
-            // Create line items (no inventory change here)
             foreach ($data['items'] as $itemData) {
                 PurchaseOrderItem::create([
                     'purchase_order_id' => $order->id,
@@ -76,14 +45,28 @@ class PurchaseOrderService
     }
 
     /**
-     * Receive a purchase order — THIS is when inventory is updated.
-     *
-     * ERP CONCEPT: "Receiving" is a warehouse term for physically accepting
-     * and counting goods that have arrived from a supplier. Only after
-     * receiving are goods considered part of available inventory.
-     *
-     * @throws \Exception if order is not in a receivable state
+     * Create PO and push to Odoo
      */
+    public function createOrderAndPushToOdoo(array $data): PurchaseOrder
+    {
+        $order = $this->createOrder($data);
+
+        try {
+            $this->pushPurchaseOrderToOdoo($order);
+            Log::info("Purchase order pushed to Odoo", [
+                'purchase_order_id' => $order->id,
+                'order_number' => $order->order_number,
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Failed to push purchase order to Odoo", [
+                'purchase_order_id' => $order->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return $order;
+    }
+
     public function receiveOrder(PurchaseOrder $order): PurchaseOrder
     {
         if (!$order->isReceivable()) {
@@ -96,12 +79,8 @@ class PurchaseOrderService
 
         return DB::transaction(function () use ($order) {
 
-            // Load items with product details
             $order->load('items.product');
 
-            // ERP KEY ACTION: Add stock for every item in the PO
-            // This simulates goods arriving at the warehouse and being
-            // counted and stocked onto shelves.
             foreach ($order->items as $item) {
                 $this->inventoryService->addStock(
                     $item->product_id,
@@ -109,20 +88,115 @@ class PurchaseOrderService
                 );
             }
 
-            // Mark the PO as received and record when it arrived
             $order->status = PurchaseOrder::STATUS_RECEIVED;
             $order->received_at = now();
             $order->save();
+
+            // Sync receipt to Odoo if PO exists there
+            try {
+                if ($order->odoo_id) {
+                    $this->odooService->execute(
+                        'purchase.order',
+                        'button_confirm',
+                        [[$order->odoo_id]]
+                    );
+                    Log::info("Purchase order receipt synced to Odoo", [
+                        'purchase_order_id' => $order->id,
+                        'odoo_po_id' => $order->odoo_id,
+                    ]);
+                }
+            } catch (\Exception $e) {
+                Log::error("Failed to sync receipt to Odoo", [
+                    'purchase_order_id' => $order->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
 
             return $order->fresh(['supplier', 'items.product']);
         });
     }
 
     /**
-     * Generate a unique, human-readable purchase order number.
-     * Format: PO-YYYYMMDD-NNN
-     * Example: PO-20250115-003
+     * Push a Purchase Order to Odoo
      */
+    private function pushPurchaseOrderToOdoo(PurchaseOrder $order): int
+    {
+        $order->load(['supplier', 'items.product']);
+
+        // Sync supplier first
+        $supplierService = app('App\Services\OdooService'); // Get from container
+        $odooSupplierId = $this->syncSupplierToOdoo($order->supplier);
+
+        // Build PO lines
+        $orderLines = [];
+        foreach ($order->items as $item) {
+            $odooProductId = $this->getOdooProductVariantId($item->product);
+
+            $orderLines[] = [
+                0, 0,
+                [
+                    'product_id' => $odooProductId,
+                    'product_qty' => $item->quantity,
+                    'price_unit' => (float) $item->unit_cost,
+                    'name' => $item->product->name,
+                ]
+            ];
+        }
+
+        // Create PO in Odoo
+        $odooPoId = $this->odooService->create('purchase.order', [
+            'partner_id' => $odooSupplierId,
+            'order_line' => $orderLines,
+            'notes' => $order->notes ?? '',
+        ]);
+
+        // Save Odoo ID
+        $order->update(['odoo_id' => $odooPoId]);
+
+        return $odooPoId;
+    }
+
+    private function syncSupplierToOdoo($supplier): int
+    {
+        if ($supplier->odoo_id) {
+            $this->odooService->write('res.partner', [$supplier->odoo_id], [
+                'name' => $supplier->name,
+                'email' => $supplier->email,
+                'phone' => $supplier->phone,
+            ]);
+            return $supplier->odoo_id;
+        }
+
+        $odooId = $this->odooService->create('res.partner', [
+            'name' => $supplier->name,
+            'email' => $supplier->email,
+            'phone' => $supplier->phone,
+            'street' => $supplier->address,
+            'supplier_rank' => 1,
+            'is_company' => false,
+        ]);
+
+        $supplier->update(['odoo_id' => $odooId]);
+
+        return $odooId;
+    }
+
+    private function getOdooProductVariantId($product): int
+    {
+        if (!$product->odoo_id) {
+            throw new \Exception("Product {$product->name} not synced to Odoo");
+        }
+
+        $variants = $this->odooService->searchRead(
+            'product.product',
+            [['product_tmpl_id', '=', $product->odoo_id]],
+            ['id'],
+            limit: 1
+        );
+
+        return $variants[0]['id'];
+    }
+
     private function generateOrderNumber(): string
     {
         $date = now()->format('Ymd');

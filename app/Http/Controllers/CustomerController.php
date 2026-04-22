@@ -3,30 +3,18 @@
 namespace App\Http\Controllers;
 
 use App\Models\Customer;
+use App\Services\OdooSalesService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Validation\ValidationException;
+use Illuminate\Routing\Controller;
+use Illuminate\Support\Facades\Log;
 
-/**
- * CustomerController
- *
- * ERP CONCEPT: Standard CRUD for customers.
- * Customers are the starting point of every Sales Order.
- *
- * CONTROLLER RESPONSIBILITY:
- * Controllers should be thin — they only handle HTTP concerns:
- *   1. Parse/validate the incoming request
- *   2. Call the appropriate model or service
- *   3. Return a formatted JSON response
- *
- * Business logic belongs in Services, not here.
- */
 class CustomerController extends Controller
 {
-    /**
-     * GET /api/customers
-     * List all customers, newest first.
-     */
+    public function __construct(
+        private readonly OdooSalesService $odooSalesService
+    ) {}
+
     public function index(): JsonResponse
     {
         $customers = Customer::latest()->paginate(20);
@@ -39,7 +27,7 @@ class CustomerController extends Controller
 
     /**
      * POST /api/customers
-     * Create a new customer.
+     * ?push_to_odoo=true to sync to Odoo
      */
     public function store(Request $request): JsonResponse
     {
@@ -52,20 +40,33 @@ class CustomerController extends Controller
 
         $customer = Customer::create($validated);
 
+        $pushToOdoo = $request->boolean('push_to_odoo', false);
+
+        if ($pushToOdoo) {
+            try {
+                $this->odooSalesService->syncCustomerToOdoo($customer);
+                Log::info("Customer synced to Odoo", [
+                    'customer_id' => $customer->id,
+                    'odoo_id' => $customer->odoo_id,
+                ]);
+            } catch (\Exception $e) {
+                Log::error("Failed to sync customer to Odoo", [
+                    'customer_id' => $customer->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Customer created successfully.',
+            'odoo_synced' => $pushToOdoo && !empty($customer->odoo_id),
             'data'    => $customer,
         ], 201);
     }
 
-    /**
-     * GET /api/customers/{id}
-     * Get a single customer with their order history.
-     */
     public function show(Customer $customer): JsonResponse
     {
-        // Eager load recent sales orders for context
         $customer->load(['salesOrders' => function ($query) {
             $query->latest()->limit(10);
         }]);
@@ -78,7 +79,7 @@ class CustomerController extends Controller
 
     /**
      * PUT /api/customers/{id}
-     * Update customer details.
+     * ?push_to_odoo=true to sync changes to Odoo
      */
     public function update(Request $request, Customer $customer): JsonResponse
     {
@@ -91,21 +92,32 @@ class CustomerController extends Controller
 
         $customer->update($validated);
 
+        $pushToOdoo = $request->boolean('push_to_odoo', false);
+
+        if ($pushToOdoo) {
+            try {
+                $this->odooSalesService->syncCustomerToOdoo($customer);
+                Log::info("Customer update synced to Odoo", [
+                    'customer_id' => $customer->id,
+                ]);
+            } catch (\Exception $e) {
+                Log::error("Failed to sync customer update to Odoo", [
+                    'customer_id' => $customer->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Customer updated successfully.',
+            'odoo_synced' => $pushToOdoo && !empty($customer->odoo_id),
             'data'    => $customer,
         ]);
     }
 
-    /**
-     * DELETE /api/customers/{id}
-     * Delete a customer (only if no orders exist).
-     */
     public function destroy(Customer $customer): JsonResponse
     {
-        // ERP RULE: Never delete a customer who has placed orders.
-        // You need their record for historical reporting and auditing.
         if ($customer->salesOrders()->exists()) {
             return response()->json([
                 'success' => false,

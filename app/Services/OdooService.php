@@ -6,14 +6,7 @@ use Exception;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
-/**
- * OdooService — XML-RPC wrapper for Odoo API
- *
- * LEARNING NOTE:
- * Odoo's XML-RPC works in 2 phases:
- *   1. Authenticate → get a user ID (uid)
- *   2. Use that uid to call methods on Odoo models
- */
+
 class OdooService
 {
     private string $url;
@@ -21,6 +14,7 @@ class OdooService
     private string $username;
     private string $apiKey;
     private ?int $uid = null;
+    private ?string $sessionId = null;
 
     public function __construct()
     {
@@ -30,151 +24,138 @@ class OdooService
         $this->apiKey   = config('services.odoo.api_key');
     }
 
-
-    public function execute(string $model, string $method, array $args, array $kwargs = []): mixed
-    {
-        $uid = $this->authenticate();
-
-        return $this->xmlRpcCall('/xmlrpc/2/object', 'execute_kw', [
-            $this->db, $uid, $this->apiKey,
-            $model, $method,
-            $args,
-            $kwargs,
-        ]);
-    }
-
     // ──────────────────────────────────────────────────────────────
     // AUTHENTICATION
     // ──────────────────────────────────────────────────────────────
 
-    /**
-     * Authenticate with Odoo and return the user ID (uid).
-     * The uid is required for all subsequent API calls.
-     */
     public function authenticate(): int
     {
         if ($this->uid !== null) {
-            return $this->uid; // Already authenticated this request
+            return $this->uid;
         }
 
-        $response = $this->xmlRpcCall('/xmlrpc/2/common', 'authenticate', [
-            $this->db,
-            $this->username,
-            $this->apiKey,
-            [],
+        $response = Http::withHeaders([
+            'Content-Type' => 'application/json',
+        ])
+            ->withoutVerifying()
+            ->post($this->url . '/web/session/authenticate', [
+                'jsonrpc' => '2.0',
+                'method'  => 'call',
+                'id'      => 1,
+                'params'  => [
+                    'db'       => $this->db,
+                    'login'    => $this->username,
+                    'password' => $this->apiKey,
+                ],
+            ]);
+
+        $body = $response->json();
+
+        if (isset($body['error'])) {
+            $msg = $body['error']['data']['message'] ?? json_encode($body['error']);
+            throw new Exception("Odoo authentication failed: {$msg}");
+        }
+
+        $uid = $body['result']['uid'] ?? null;
+
+        if (!$uid) {
+            throw new Exception(
+                'Odoo authentication failed. Check ODOO_USERNAME and ODOO_API_KEY in your .env.'
+            );
+        }
+
+        $this->uid = $uid;
+
+        // Try body first, then fall back to Set-Cookie response header
+        $this->sessionId = $body['result']['session_id'] ?? null;
+
+        if (!$this->sessionId) {
+            $setCookie = $response->header('Set-Cookie');
+            if ($setCookie && preg_match('/session_id=([^;]+)/', $setCookie, $matches)) {
+                $this->sessionId = $matches[1];
+            }
+        }
+
+        Log::info('Odoo authenticated', [
+            'uid'        => $uid,
+            'session_id' => $this->sessionId ? 'found' : 'MISSING',
         ]);
 
-        if (!$response || !is_int($response)) {
-            throw new Exception('Odoo authentication failed. Check your credentials.');
-        }
-
-        $this->uid = $response;
         return $this->uid;
     }
-
     // ──────────────────────────────────────────────────────────────
-    // CORE CRUD METHODS
+    // CORE CRUD METHODS (same API as before — only transport changed)
     // ──────────────────────────────────────────────────────────────
 
     /**
      * Search for records matching a domain filter.
+     * Returns array of matching record IDs.
      *
-     * @param  string  $model   e.g. 'sale.order', 'res.partner', 'product.product'
+     * @param  string  $model   e.g. 'sale.order', 'res.partner', 'product.template'
      * @param  array   $domain  e.g. [['state', '=', 'sale']]
-     * @return array   Array of record IDs
+     * @return array   Array of integer IDs
      */
     public function search(string $model, array $domain = []): array
     {
-        $uid = $this->authenticate();
-
-        return $this->xmlRpcCall('/xmlrpc/2/object', 'execute_kw', [
-            $this->db, $uid, $this->apiKey,
-            $model, 'search',
-            [$domain],
-        ]);
+        return $this->callKw($model, 'search', [$domain]);
     }
 
     /**
      * Read specific fields from records by IDs.
      *
-     * @param  string  $model   Odoo model name
+     * @param  string  $model
      * @param  array   $ids     Record IDs from search()
-     * @param  array   $fields  Fields to retrieve, e.g. ['name', 'state', 'amount_total']
-     * @return array   Array of records as associative arrays
+     * @param  array   $fields  e.g. ['name', 'state', 'amount_total']
+     * @return array
      */
     public function read(string $model, array $ids, array $fields = []): array
     {
-        $uid = $this->authenticate();
-
-        return $this->xmlRpcCall('/xmlrpc/2/object', 'execute_kw', [
-            $this->db, $uid, $this->apiKey,
-            $model, 'read',
-            [$ids],
-            ['fields' => $fields],
-        ]);
+        return $this->callKw($model, 'read', [$ids], ['fields' => $fields]);
     }
 
     /**
-     * Search AND read in one call (most efficient).
+     * Search AND read in one call — most efficient for listing records.
      *
      * @param  string  $model
-     * @param  array   $domain  Filter conditions
-     * @param  array   $fields  Fields to return
-     * @param  int     $limit   Max records (0 = no limit)
+     * @param  array   $domain
+     * @param  array   $fields
+     * @param  int     $limit   0 = no limit
      * @return array
      */
     public function searchRead(string $model, array $domain = [], array $fields = [], int $limit = 0): array
     {
-        $uid = $this->authenticate();
-
         $kwargs = ['fields' => $fields];
+
         if ($limit > 0) {
             $kwargs['limit'] = $limit;
         }
 
-        return $this->xmlRpcCall('/xmlrpc/2/object', 'execute_kw', [
-            $this->db, $uid, $this->apiKey,
-            $model, 'search_read',
-            [$domain],
-            $kwargs,
-        ]);
+        return $this->callKw($model, 'search_read', [$domain], $kwargs);
     }
 
     /**
-     * Create a new record in Odoo.
+     * Create a new record. Returns the new record's ID.
      *
-     * @param  string  $model   Odoo model name
-     * @param  array   $values  Field values for the new record
-     * @return int     The new record's ID
+     * @param  string  $model
+     * @param  array   $values  Field => value pairs
+     * @return int
      */
     public function create(string $model, array $values): int
     {
-        $uid = $this->authenticate();
-
-        return $this->xmlRpcCall('/xmlrpc/2/object', 'execute_kw', [
-            $this->db, $uid, $this->apiKey,
-            $model, 'create',
-            [$values],
-        ]);
+        return $this->callKw($model, 'create', [$values]);
     }
 
     /**
-     * Update existing records.
+     * Update existing records. Returns true on success.
      *
-     * @param  string  $model   Odoo model name
-     * @param  array   $ids     Record IDs to update
-     * @param  array   $values  Fields to update
+     * @param  string  $model
+     * @param  array   $ids
+     * @param  array   $values
      * @return bool
      */
     public function write(string $model, array $ids, array $values): bool
     {
-        $uid = $this->authenticate();
-
-        return $this->xmlRpcCall('/xmlrpc/2/object', 'execute_kw', [
-            $this->db, $uid, $this->apiKey,
-            $model, 'write',
-            [$ids, $values],
-        ]);
+        return $this->callKw($model, 'write', [$ids, $values]);
     }
 
     /**
@@ -186,46 +167,97 @@ class OdooService
      */
     public function unlink(string $model, array $ids): bool
     {
-        $uid = $this->authenticate();
+        return $this->callKw($model, 'unlink', [$ids]);
+    }
 
-        return $this->xmlRpcCall('/xmlrpc/2/object', 'execute_kw', [
-            $this->db, $uid, $this->apiKey,
-            $model, 'unlink',
-            [$ids],
-        ]);
+    /**
+     * Execute any Odoo method — used for workflow actions.
+     * e.g. action_confirm, action_cancel, button_validate
+     *
+     * @param  string  $model
+     * @param  string  $method
+     * @param  array   $args
+     * @param  array   $kwargs
+     * @return mixed
+     */
+    public function execute(string $model, string $method, array $args = [], array $kwargs = []): mixed
+    {
+        return $this->callKw($model, $method, $args, $kwargs);
     }
 
     // ──────────────────────────────────────────────────────────────
-    // XML-RPC LOW-LEVEL TRANSPORT
+    // JSON-RPC TRANSPORT
     // ──────────────────────────────────────────────────────────────
 
     /**
-     * Make a raw XML-RPC call to Odoo.
+     * Call any Odoo model method via /web/dataset/call_kw.
      *
      * LEARNING NOTE:
-     * XML-RPC is just HTTP POST with an XML body.
-     * The request says: "call this method with these params"
-     * The response says: "here's what it returned"
+     * This is the single entry point for all Odoo operations after login.
+     * Every CRUD call (search, read, create, write...) goes through here.
+     *
+     * The JSON-RPC body structure:
+     * {
+     *   "jsonrpc": "2.0",
+     *   "method":  "call",
+     *   "params": {
+     *     "model":  "product.template",
+     *     "method": "create",
+     *     "args":   [{ "name": "Widget", "list_price": 100.0 }],
+     *     "kwargs": {}
+     *   }
+     * }
      */
-    private function xmlRpcCall(string $endpoint, string $method, array $params): mixed
+    private function callKw(string $model, string $method, array $args = [], array $kwargs = []): mixed
     {
-        $xml = xmlrpc_encode_request($method, $params, ['encoding' => 'UTF-8']);
+        if ($this->uid === null) {
+            $this->authenticate();
+        }
 
-        $response = Http::withHeaders([
-            'Content-Type' => 'text/xml',
-        ])->withBody($xml, 'text/xml')
-            ->post($this->url . $endpoint);
+        $headers = [
+            'Content-Type' => 'application/json',
+        ];
+
+        if ($this->sessionId) {
+            $headers['Cookie'] = 'session_id=' . $this->sessionId;
+        }
+
+        $payload = [
+            'jsonrpc' => '2.0',
+            'method'  => 'call',
+            'id'      => rand(1, 99999),
+            'params'  => [
+                'model'   => $model,
+                'method'  => $method,
+                'args'    => $args,
+                'kwargs'  => (object) $kwargs,
+            ],
+        ];
+
+        $response = Http::withHeaders($headers)
+            ->withoutVerifying()
+            ->post($this->url . '/web/dataset/call_kw', $payload);
 
         if ($response->failed()) {
-            throw new Exception("Odoo XML-RPC HTTP error: " . $response->status());
+            throw new Exception(
+                "Odoo HTTP error {$response->status()} calling {$model}.{$method}"
+            );
         }
 
-        $result = xmlrpc_decode($response->body(), 'UTF-8');
+        $body = $response->json();
 
-        if (is_array($result) && xmlrpc_is_fault($result)) {
-            throw new Exception("Odoo XML-RPC fault [{$result['faultCode']}]: {$result['faultString']}");
+        if (isset($body['error'])) {
+            $errData    = $body['error']['data'] ?? [];
+            $errMessage = $errData['message'] ?? $body['error']['message'] ?? json_encode($body['error']);
+            $errName    = $errData['name'] ?? 'OdooError';
+
+            Log::error("Odoo {$errName} on {$model}.{$method}", [
+                'message' => $errMessage,
+                'args'    => $args,
+            ]);
+
+            throw new Exception("Odoo error [{$errName}] on {$model}.{$method}: {$errMessage}");
         }
 
-        return $result;
-    }
-}
+        return $body['result'] ?? null;
+    }}
